@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<menu>
+  <item>
+    <path>civicrm/beucimport</path>
+    <page_callback>CRM_Beucimport_Page_BeucImport</page_callback>
+    <title>BeucImport</title>
+    <access_arguments>access CiviCRM</access_arguments>
+  </item>
+    <item>
+        <path>civicrm/beucimport-execute</path>
+        <page_callback>CRM_Beucimport_Page_BeucImportExecute</page_callback>
+        <title>BeucImport - Execute</title>
+        <access_arguments>access CiviCRM</access_arguments>
+    </item>
+</menu>
