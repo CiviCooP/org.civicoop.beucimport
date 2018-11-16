@@ -147,31 +147,63 @@ class CRM_Beucimport_Helper {
   }
 
   public function importPersons() {
+    $numItemsPerQueueRun = 20;
 
+    $msg = '';
+
+    // create queue
+    $this->createQueue();
+
+    if ($this->queue->numberOfItems() > 0) {
+      $msg = 'The queue is not empty: it contains ' . $this->queue->numberOfItems() . ' item(s).';
+    }
+    else {
+      // count the number of items to import
+      $sql = "select count(*) from tmp_pers where ifnull(status, '') = ''";
+      $numItems = CRM_Core_DAO::singleValueQuery($sql);
+
+      // fill the queue
+      $totalQueueRuns = ($numItems / $numItemsPerQueueRun) + 1;
+      for ($i = 0; $i < $numItems; $i++) {
+        $task = new CRM_Queue_Task(['CRM_Beucimport_Helper', 'importPersonTask'], [$numItemsPerQueueRun]);
+        $this->queue->createItem($task);
+      }
+
+      $msg = 'Running queue';
+      $this->runQueue('Import Persons');
+    }
+
+    return $msg;
   }
 
   public function importPhoneNumbers() {
+    $numItemsPerQueueRun = 20;
 
-  }
+    $msg = '';
 
-  private function createQueue() {
-    $this->queue = CRM_Queue_Service::singleton()->create([
-      'type' => 'Sql',
-      'name' => $this->queueName,
-      'reset' => FALSE, //do not flush queue upon creation
-    ]);
-  }
+    // create queue
+    $this->createQueue();
 
-  private function runQueue($title) {
-    $runner = new CRM_Queue_Runner([
-      'title' => $title,
-      'queue' => $this->queue,
-      'errorMode'=> CRM_Queue_Runner::ERROR_CONTINUE,
-      'onEnd' => ['CRM_Beucimport_Helper', 'onEnd'],
-      'onEndUrl' => CRM_Utils_System::url('civicrm/beucimport', 'reset=1'),
-    ]);
+    if ($this->queue->numberOfItems() > 0) {
+      $msg = 'The queue is not empty: it contains ' . $this->queue->numberOfItems() . ' item(s).';
+    }
+    else {
+      // count the number of items to import
+      $sql = "select count(*) from tmp_phones where ifnull(status, '') = ''";
+      $numItems = CRM_Core_DAO::singleValueQuery($sql);
 
-    $runner->runAllViaWeb();
+      // fill the queue
+      $totalQueueRuns = ($numItems / $numItemsPerQueueRun) + 1;
+      for ($i = 0; $i < $numItems; $i++) {
+        $task = new CRM_Queue_Task(['CRM_Beucimport_Helper', 'importPhoneNumbersTask'], [$numItemsPerQueueRun]);
+        $this->queue->createItem($task);
+      }
+
+      $msg = 'Running queue';
+      $this->runQueue('Import Phone Numbers');
+    }
+
+    return $msg;
   }
 
   public static function importOrganizationTask(CRM_Queue_TaskContext $ctx, $limit) {
@@ -242,6 +274,133 @@ class CRM_Beucimport_Helper {
     }
 
     return TRUE;
+  }
+
+  public static function importPersonTask(CRM_Queue_TaskContext $ctx, $limit) {
+    $sql = "
+      select
+        p.*
+        , ov.value prefix_id
+      from
+        tmp_pers p
+      left outer join
+        civicrm_option_value ov on p.title collate utf8_general_ci = ov.name collate utf8_general_ci and option_group_id = 6
+      where 
+        ifnull(status, '') = ''
+      limit
+        0, $limit        
+    ";
+    $dao = CRM_Core_DAO::executeQuery($sql);
+
+    while ($dao->fetch()) {
+      // see if we have this contact
+      $params = [
+        'sequential' => 1,
+        'external_identifier' => $dao->external_identifier,
+      ];
+      $c = civicrm_api3('Contact', 'get', $params);
+
+      if ($c['count'] == 0) {
+        // does not exist, add additional fields
+        $params['contact_type'] = 'Individual';
+        $params['first_name'] = $dao->first_name;
+        $params['last_name'] = $dao->last_name;
+        $params['source'] = $dao->source;
+        $params['employer_id'] = self::getOrganizationFromExternalID($dao->employer_id);
+        $params['job_title'] = $dao->job_title;
+        $params['preferred_language'] = $dao->preferred_language;
+
+        // in civi: female = 1, male = 2 (in BEUC it's the other way around)
+        if ($dao->gender == 1) {
+          $params['gender_id'] = 2;
+        }
+        elseif ($dao->gender == 2) {
+          $params['gender_id'] = 1;
+        }
+
+        // prefix (Mr., Mrs...)
+        if ($dao->prefix_id) {
+          $params['prefix_id'] = $dao->prefix_id;
+        }
+        elseif ($dao->gender == 1) {
+          $params['prefix_id'] = 3; // Mr.
+        }
+        elseif ($dao->gender == 2) {
+          $params['prefix_id'] = 1; // Mrs.
+        }
+
+        // add twitter link
+        if ($dao->twitter) {
+          $params['api.Website.create'] = [
+            'url' => $dao->twitter,
+            'website_type_id' => 11,
+          ];
+        }
+
+        // add note
+        if ($dao->comments) {
+          $params['api.Note.create'] = [
+            'note' => $dao->comments,
+            'entity_table' => 'civicrm_contact',
+            'subject' => 'imported note',
+          ];
+        }
+
+        // add email
+        if ($dao->email) {
+          $params['api.Email.create'] = [
+            'email' => $dao->email,
+            'location_type_id' => 2, //work
+            'is_primary' => 1,
+          ];
+        }
+
+        civicrm_api3('Contact', 'create', $params);
+
+        $updateSQL = "update tmp_orgs set status = 'OK' where external_identifier = '" . $dao->external_identifier . "'";
+        CRM_Core_DAO::executeQuery($updateSQL);
+      }
+    }
+
+    return TRUE;
+  }
+
+  public static function getOrganizationFromExternalID($external_identifier) {
+    $retval = NULL;
+
+    if ($external_identifier) {
+      $params = [
+        'external_identifier' => $external_identifier,
+        'contact_type' => 'Organization',
+        'sequential' => 1,
+      ];
+      $c = civicrm_api3('Contact', 'get', $params);
+      if ($c['count'] > 0) {
+        $retval = $c['values'][0]['id'];
+      }
+    }
+
+    return $retval;
+  }
+
+  private function createQueue() {
+    $this->queue = CRM_Queue_Service::singleton()->create([
+      'type' => 'Sql',
+      'name' => $this->queueName,
+      'reset' => FALSE, //do not flush queue upon creation
+    ]);
+  }
+
+  private function runQueue($title) {
+    $runner = new CRM_Queue_Runner([
+      'title' => $title,
+      'queue' => $this->queue,
+      'errorMode'=> CRM_Queue_Runner::ERROR_CONTINUE,
+      'onEnd' => ['CRM_Beucimport_Helper', 'onEnd'],
+      'onEndUrl' => CRM_Utils_System::url('civicrm/beucimport', 'reset=1'),
+    ]);
+
+    $runner->runAllViaWeb();
   }
 
   public static function onEnd(CRM_Queue_TaskContext $ctx) {
