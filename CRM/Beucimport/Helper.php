@@ -176,36 +176,6 @@ class CRM_Beucimport_Helper {
     return $msg;
   }
 
-  public function importPhoneNumbers() {
-    $numItemsPerQueueRun = 20;
-
-    $msg = '';
-
-    // create queue
-    $this->createQueue();
-
-    if ($this->queue->numberOfItems() > 0) {
-      $msg = 'The queue is not empty: it contains ' . $this->queue->numberOfItems() . ' item(s).';
-    }
-    else {
-      // count the number of items to import
-      $sql = "select count(*) from tmp_phones where ifnull(status, '') = ''";
-      $numItems = CRM_Core_DAO::singleValueQuery($sql);
-
-      // fill the queue
-      $totalQueueRuns = ($numItems / $numItemsPerQueueRun) + 1;
-      for ($i = 0; $i < $numItems; $i++) {
-        $task = new CRM_Queue_Task(['CRM_Beucimport_Helper', 'importPhoneNumbersTask'], [$numItemsPerQueueRun]);
-        $this->queue->createItem($task);
-      }
-
-      $msg = 'Running queue';
-      $this->runQueue('Import Phone Numbers');
-    }
-
-    return $msg;
-  }
-
   public static function importOrganizationTask(CRM_Queue_TaskContext $ctx, $limit) {
     $sql = "
       select
@@ -355,9 +325,12 @@ class CRM_Beucimport_Helper {
           ];
         }
 
-        civicrm_api3('Contact', 'create', $params);
+        $c = civicrm_api3('Contact', 'create', $params);
 
-        $updateSQL = "update tmp_orgs set status = 'OK' where external_identifier = '" . $dao->external_identifier . "'";
+        // add phone numbers
+        self::addPhoneNumbers($c['id'], $dao->external_identifier);
+
+        $updateSQL = "update tmp_pers set status = 'OK' where external_identifier = '" . $dao->external_identifier . "'";
         CRM_Core_DAO::executeQuery($updateSQL);
       }
     }
@@ -365,8 +338,35 @@ class CRM_Beucimport_Helper {
     return TRUE;
   }
 
+  public static function addPhoneNumbers($contactID, $external_identifier) {
+    $sql = "
+      select
+        external_identifier, phone_type, max(phone) phone_number
+      from
+        tmp_phones
+      where
+        external_identifier = %1
+      group by
+        external_identifier, phone_type
+    ";
+    $sqlParams = [
+      1 => [$external_identifier, 'String'],
+    ];
+    $dao = CRM_Core_DAO::executeQuery($sql, $sqlParams);
+
+    while ($dao->fetch()) {
+      $params = [
+        'contact_id' => $contactID,
+        'phone' => substr($dao->phone_number, 0, 32),
+        'location_type_id' => 2, // work
+        'phone_type_id' => $dao->phone_type == 'mobile' ? 2 : 1,
+      ];
+      civicrm_api3('Phone', 'create', $params);
+    }
+  }
+
   public static function getOrganizationFromExternalID($external_identifier) {
-    $retval = NULL;
+    $retval = '';
 
     if ($external_identifier) {
       $params = [

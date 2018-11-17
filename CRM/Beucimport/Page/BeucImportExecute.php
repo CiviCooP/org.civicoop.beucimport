@@ -24,9 +24,6 @@ class CRM_Beucimport_Page_BeucImportExecute extends CRM_Core_Page {
       elseif ($action == 'importPersons') {
         $msg = $importHelper->importPersons();
       }
-      elseif ($action == 'importPhoneNumbers') {
-        $msg = $importHelper->importPhoneNumbers();
-      }
       elseif ($action == 'deleteQueue') {
         $msg = $importHelper->deleteQueue();
       }
