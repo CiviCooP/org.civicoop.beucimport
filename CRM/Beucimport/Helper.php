@@ -14,62 +14,19 @@ class CRM_Beucimport_Helper {
     return $msg;
   }
 
-  public function checkConfiguration() {
-    $msg = [];
-
-    // check contact sub types
-    $sql = "
-      select
-        distinct t.contact_sub_type
-      from
-        tmp_orgs t
-      where
-        not exists (
-          select * from civicrm_contact_type ct where ct.name collate utf8_general_ci = t.contact_sub_type collate utf8_general_ci
-        )
-        and ifnull(t.contact_sub_type, '') <> ''
-    ";
-    $dao = CRM_Core_DAO::executeQuery($sql);
-    while ($dao->fetch()) {
-      $msg[] = 'Contact subtype "' . $dao->contact_sub_type . '" does not exist';
-    }
-
-    // check missing tags
-    $sql = "
-      select
-        distinct tag
-      from
-        tmp_orgs t
-      where
-        not exists (
-          select * from civicrm_tag ct where ct.name collate utf8_general_ci = t.tag collate utf8_general_ci
-        )
-        and ifnull(t.tag, '') <> ''
-    ";
-    $dao = CRM_Core_DAO::executeQuery($sql);
-    while ($dao->fetch()) {
-      $msg[] = 'Tag "' . $dao->tag . '" does not exist';
-    }
-
-    if (count($msg) == 0) {
-      $msg[] = 'OK';
-    }
-
-    return $msg;
-  }
-
   public function createConfiguration() {
     $msg = [];
 
-    // create missing contact types
+    // create contact types
+    $msg[] = "=== Checking Contact Sub Types ===";
     $sql = "
       select
         distinct t.contact_sub_type
       from
-        tmp_orgs t
+        tmpbeuc_orgs t
       where
         not exists (
-          select * from civicrm_contact_type ct where ct.name collate utf8_general_ci = t.contact_sub_type collate utf8_general_ci
+          select * from civicrm_contact_type ct where ct.name = t.contact_sub_type
         )
         and ifnull(t.contact_sub_type, '') <> ''
     ";
@@ -85,15 +42,16 @@ class CRM_Beucimport_Helper {
       $msg[] = 'Create subtype ' . $dao->contact_sub_type;
     }
 
-    // create missing tags
+    // create tags
+    $msg[] = "=== Checking Tags ===";
     $sql = "
       select
         distinct tag
       from
-        tmp_orgs t
+        tmpbeuc_orgs t
       where
         not exists (
-          select * from civicrm_tag ct where ct.name collate utf8_general_ci = t.tag collate utf8_general_ci
+          select * from civicrm_tag ct where ct.name = t.tag
         )
         and ifnull(t.tag, '') <> ''
     ";
@@ -112,7 +70,104 @@ class CRM_Beucimport_Helper {
       $msg[] = 'OK';
     }
 
+    // create custom group press
+    $msg[] = "=== Checking Custom Group Press ===";
+    $result = civicrm_api3('CustomGroup', 'get', ['title' => "Press", 'sequential' => 1]);
+    if ($result['count'] == 0) {
+      $result = civicrm_api3('CustomGroup', 'create', [
+        'title' => "Press",
+        'extends' => "Organization",
+        'extends_entity_column_value' => ['Press_Organisation'],
+        'name' => "press",
+        'collapse_display' => 0,
+        'style' => "Inline",
+        'table_name' => "civicrm_value_press",
+        'sequential' => 1,
+      ]);
+
+      $msg[] = 'Create custom group Press';
+    }
+
+    $groupID = $result['values'][0]['id'];
+
+    // create custom fields for press
+    $msg[] = "=== Checking Custom Fields for Press ===";
+    $result = civicrm_api3('CustomField', 'get', ['label' => "Media Country"]);
+    if ($result['count'] == 0) {
+      $result = civicrm_api3('CustomField', 'create', [
+        'custom_group_id' => $groupID,
+        'label' => "Media Country",
+        'data_type' => "Country",
+        'is_searchable' => 1,
+        'is_active' => 1,
+        'column_name' => "media_country",
+        'html_type' => "Select",
+      ]);
+
+      $msg[] = 'Create custom field Media Country';
+    }
+
+    // create the option group for custom field media type
+    $result = civicrm_api3('OptionGroup', 'get', ['name' => "media_type_list", 'sequential' => 1]);
+    if ($result['count'] == 0) {
+      $result = civicrm_api3('OptionGroup', 'create', [
+        "name" => "media_type_list",
+        "title" => "Media Type List",
+        "is_reserved" => "0",
+        "is_active" => "1",
+        "is_locked" => "0",
+        'sequential' => 1,
+      ]);
+    }
+    $listID = $result['values'][0]['id'];
+
+    // add the option items
+    $this->createOptionListItem($listID, 1, 'News Agency'); 
+    $this->createOptionListItem($listID, 2, 'Newspaper');
+    $this->createOptionListItem($listID, 3, 'Magazine');
+    $this->createOptionListItem($listID, 4, 'TV');
+    $this->createOptionListItem($listID, 5, 'Radio');
+    $this->createOptionListItem($listID, 6, 'Weekly');
+    $this->createOptionListItem($listID, 7, 'Online');
+    $this->createOptionListItem($listID, 8, 'Blog');
+    $this->createOptionListItem($listID, 9, 'Broadcaster');
+
+    // create custom field for media type
+    $result = civicrm_api3('CustomField', 'get', ['label' => "Media Type"]);
+    if ($result['count'] == 0) {
+      $result = civicrm_api3('CustomField', 'create', [
+        'custom_group_id' => $groupID,
+        'label' => "Media Type",
+        'name' => 'media_type',
+        'data_type' => 'Int',
+        'html_type' => 'Radio',
+        'is_required' => '0',
+        'is_searchable' => '1',
+        'is_search_range' => '0',
+        'is_active' => '1',
+        'options_per_line' => '1',
+        'column_name' => 'media_type',
+        'option_group_id' => $listID,
+      ]);
+
+      $msg[] = 'Create custom field Media Type';
+    }
+
     return $msg;
+  }
+
+  private function createOptionListItem($listID, $id, $label) {
+    $name = str_replace(' ', '-', strtolower($label));
+    $result = civicrm_api3('OptionValue', 'get', ['option_group_id' => $listID, 'name' => $name, 'sequential' => 1]);
+    if ($result['count'] == 0) {
+      civicrm_api3('OptionValue', 'create', [
+        'option_group_id' => $listID,
+        'label' => $label,
+        'value' => $id,
+        'name' => $name,
+        'is_active' => '1'
+      ]);
+    }
 
   }
 
@@ -129,7 +184,7 @@ class CRM_Beucimport_Helper {
     }
     else {
       // count the number of items to import
-      $sql = "select count(*) from tmp_orgs where ifnull(status, '') = ''";
+      $sql = "select count(*) from tmpbeuc_orgs where ifnull(status, '') = ''";
       $numItems = CRM_Core_DAO::singleValueQuery($sql);
 
       // fill the queue
@@ -159,7 +214,7 @@ class CRM_Beucimport_Helper {
     }
     else {
       // count the number of items to import
-      $sql = "select count(*) from tmp_pers where ifnull(status, '') = ''";
+      $sql = "select count(*) from tmpbeuc_pers where ifnull(status, '') = ''";
       $numItems = CRM_Core_DAO::singleValueQuery($sql);
 
       // fill the queue
@@ -177,17 +232,28 @@ class CRM_Beucimport_Helper {
   }
 
   public static function importOrganizationTask(CRM_Queue_TaskContext $ctx, $limit) {
+    static $custom_field_media_type = '';
+    static $custom_field_media_country = '';
+
+    // get custom field id's
+    if ($custom_field_media_type == '') {
+      $custom_field_media_type = 'custom_' . civicrm_api3('CustomField', 'getsingle', ['return' => ["id"], 'custom_group_id' => "press", 'name' => "media_type"])['id'];
+    }
+    if ($custom_field_media_country == '') {
+      $custom_field_media_country = 'custom_' . civicrm_api3('CustomField', 'getsingle', ['return' => ["id"], 'custom_group_id' => "press", 'name' => "media_country"])['id'];
+    }
+
     $sql = "
       select
         o.*,
         t.id as tag_id,
         c.id as country_id
       from
-        tmp_orgs o
+        tmpbeuc_orgs o
       left outer join 
-        civicrm_tag t on o.tag collate utf8_general_ci = t.name collate utf8_general_ci
+        civicrm_tag t on o.tag = t.name
       left outer join 
-        civicrm_country c on o.country_iso_code collate utf8_general_ci = c.iso_code collate utf8_general_ci
+        civicrm_country c on o.country_iso_code = c.iso_code
       where 
         ifnull(status, '') = ''
       limit
@@ -208,6 +274,18 @@ class CRM_Beucimport_Helper {
         $params['contact_type'] = 'Organization';
         $params['organization_name'] = $dao->organization_name;
         $params['source'] = $dao->source;
+
+        if ($dao->contact_sub_type) {
+          $params['contact_sub_type'] = $dao->contact_sub_type;
+        }
+
+        if ($dao->media_type_id) {
+          $params[$custom_field_media_type] = $dao->media_type_id;
+        }
+
+        if ($dao->press_country_iso_code) {
+          $params[$custom_field_media_country] = $dao->press_country_iso_code;
+        }
 
         // add website
         if ($dao->website2) {
@@ -238,7 +316,7 @@ class CRM_Beucimport_Helper {
 
         civicrm_api3('Contact', 'create', $params);
 
-        $updateSQL = "update tmp_orgs set status = 'OK' where external_identifier = '" . $dao->external_identifier . "'";
+        $updateSQL = "update tmpbeuc_orgs set status = 'O' where external_identifier = '" . $dao->external_identifier . "'";
         CRM_Core_DAO::executeQuery($updateSQL);
       }
     }
@@ -252,9 +330,9 @@ class CRM_Beucimport_Helper {
         p.*
         , ov.value prefix_id
       from
-        tmp_pers p
+        tmpbeuc_pers p
       left outer join
-        civicrm_option_value ov on p.title collate utf8_general_ci = ov.name collate utf8_general_ci and option_group_id = 6
+        civicrm_option_value ov on p.title = ov.name and option_group_id = 6
       where 
         ifnull(status, '') = ''
       limit
@@ -330,7 +408,7 @@ class CRM_Beucimport_Helper {
         // add phone numbers
         self::addPhoneNumbers($c['id'], $dao->external_identifier);
 
-        $updateSQL = "update tmp_pers set status = 'OK' where external_identifier = '" . $dao->external_identifier . "'";
+        $updateSQL = "update tmpbeuc_pers set status = 'O' where external_identifier = '" . $dao->external_identifier . "'";
         CRM_Core_DAO::executeQuery($updateSQL);
       }
     }
@@ -343,7 +421,7 @@ class CRM_Beucimport_Helper {
       select
         external_identifier, phone_type, max(phone) phone_number
       from
-        tmp_phones
+        tmpbeuc_phones
       where
         external_identifier = %1
       group by

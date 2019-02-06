@@ -12,10 +12,7 @@ class CRM_Beucimport_Page_BeucImportExecute extends CRM_Core_Page {
     $importHelper = new CRM_Beucimport_Helper();
 
     try {
-      if ($action == 'checkConfig') {
-        $msg = $importHelper->checkConfiguration();
-      }
-      elseif ($action == 'createConfig') {
+      if ($action == 'createConfig') {
         $msg = $importHelper->createConfiguration();
       }
       elseif ($action == 'importOrganizations') {
