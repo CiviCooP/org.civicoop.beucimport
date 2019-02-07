@@ -171,6 +171,32 @@ class CRM_Beucimport_Helper {
 
   }
 
+  public function importGroups() {
+    $msg = '';
+
+    // create queue
+    $this->createQueue();
+
+    if ($this->queue->numberOfItems() > 0) {
+      $msg = 'The queue is not empty: it contains ' . $this->queue->numberOfItems() . ' item(s).';
+    }
+    else {
+      $sql = "select * from tmpbeuc_groups";
+      $dao = CRM_Core_DAO::executeQuery($sql);
+
+      // fill the queue with group id's
+      while ($dao->fetch()) {
+        $task = new CRM_Queue_Task(['CRM_Beucimport_Helper', 'importGroupTask'], [$dao->gid]);
+        $this->queue->createItem($task);
+      }
+
+      $msg = 'Running queue';
+      $this->runQueue('Import Groups');
+    }
+
+    return $msg;
+  }
+
   public function importOrganizations() {
     $numItemsPerQueueRun = 20;
 
@@ -189,7 +215,7 @@ class CRM_Beucimport_Helper {
 
       // fill the queue
       $totalQueueRuns = ($numItems / $numItemsPerQueueRun) + 1;
-      for ($i = 0; $i < $numItems; $i++) {
+      for ($i = 0; $i < $totalQueueRuns; $i++) {
         $task = new CRM_Queue_Task(['CRM_Beucimport_Helper', 'importOrganizationTask'], [$numItemsPerQueueRun]);
         $this->queue->createItem($task);
       }
@@ -219,7 +245,7 @@ class CRM_Beucimport_Helper {
 
       // fill the queue
       $totalQueueRuns = ($numItems / $numItemsPerQueueRun) + 1;
-      for ($i = 0; $i < $numItems; $i++) {
+      for ($i = 0; $i < $totalQueueRuns; $i++) {
         $task = new CRM_Queue_Task(['CRM_Beucimport_Helper', 'importPersonTask'], [$numItemsPerQueueRun]);
         $this->queue->createItem($task);
       }
@@ -324,6 +350,39 @@ class CRM_Beucimport_Helper {
     return TRUE;
   }
 
+  public static function importGroupTask(CRM_Queue_TaskContext $ctx, $gid) {
+    // select the name of the group
+    $sql = "select `group` from tmpbeuc_groups where gid = $gid";
+    $groupName = CRM_Core_DAO::singleValueQuery($sql);
+
+    // see if we have that group
+    $result = civicrm_api3('Group', 'get', ['title' => $groupName, 'sequential' => 1]);
+    if ($result['count'] == 0) {
+      // create the group
+      $result = civicrm_api3('Group', 'create', ['title' => $groupName, 'sequential' => 1]);
+    }
+    $groupID = $result['values'][0]['id'];
+
+    // select the group members
+    $sql = "select * from tmpbeuc_group_members where gid = $gid";
+    $dao = CRM_Core_DAO::executeQuery($sql);
+    while ($dao->fetch()) {
+      // lookup the contact
+      $result = civicrm_api3('Contact', 'get', ['external_identifier' => 'uid_' . $dao->uid, 'sequential' => 1]);
+      if ($result['count'] == 0) {
+        watchdog('import group member', 'uid ' . $dao->uid . 'not found');
+      }
+      else {
+        civicrm_api3('GroupContact', 'create', [
+          'group_id' => $groupID,
+          'contact_id' => $result['values'][0]['id'],
+        ]);
+      }
+    }
+
+    return TRUE;
+  }
+
   public static function importPersonTask(CRM_Queue_TaskContext $ctx, $limit) {
     $sql = "
       select
@@ -341,6 +400,13 @@ class CRM_Beucimport_Helper {
     $dao = CRM_Core_DAO::executeQuery($sql);
 
     while ($dao->fetch()) {
+      // skip if it's empty
+      if (!$dao->first_name && !$dao->last_name && !$dao->email) {
+        $updateSQL = "update tmpbeuc_pers set status = 'O' where external_identifier = '" . $dao->external_identifier . "'";
+        CRM_Core_DAO::executeQuery($updateSQL);
+        continue;
+      }
+
       // see if we have this contact
       $params = [
         'sequential' => 1,
@@ -357,6 +423,11 @@ class CRM_Beucimport_Helper {
         $params['employer_id'] = self::getOrganizationFromExternalID($dao->employer_id);
         $params['job_title'] = $dao->job_title;
         $params['preferred_language'] = $dao->preferred_language;
+
+        // if no name, fill in email as first name
+        if (!$dao->first_name && !$dao->last_name) {
+          $params['first_name'] = $dao->email;
+        }
 
         // in civi: female = 1, male = 2 (in BEUC it's the other way around)
         if ($dao->gender == 1) {

@@ -24,6 +24,9 @@ class CRM_Beucimport_Page_BeucImportExecute extends CRM_Core_Page {
       elseif ($action == 'deleteQueue') {
         $msg = $importHelper->deleteQueue();
       }
+      elseif ($action == 'importGroups') {
+        $msg = $importHelper->importGroups();
+      }
       else {
         $msg = 'Error: Unknown action';
       }
