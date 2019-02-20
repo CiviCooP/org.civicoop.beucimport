@@ -197,9 +197,7 @@ class CRM_Beucimport_Helper {
     return $msg;
   }
 
-  public function importOrganizations() {
-    $numItemsPerQueueRun = 20;
-
+  public function importGroupCorrections() {
     $msg = '';
 
     // create queue
@@ -209,14 +207,37 @@ class CRM_Beucimport_Helper {
       $msg = 'The queue is not empty: it contains ' . $this->queue->numberOfItems() . ' item(s).';
     }
     else {
-      // count the number of items to import
-      $sql = "select count(*) from tmpbeuc_orgs where ifnull(status, '') = ''";
-      $numItems = CRM_Core_DAO::singleValueQuery($sql);
+      $sql = "select * from tmpbeuc_group_member_corrections";
+      $dao = CRM_Core_DAO::executeQuery($sql);
 
-      // fill the queue
-      $totalQueueRuns = ($numItems / $numItemsPerQueueRun) + 1;
-      for ($i = 0; $i < $totalQueueRuns; $i++) {
-        $task = new CRM_Queue_Task(['CRM_Beucimport_Helper', 'importOrganizationTask'], [$numItemsPerQueueRun]);
+      // fill the queue with group id's
+      while ($dao->fetch()) {
+        $task = new CRM_Queue_Task(['CRM_Beucimport_Helper', 'importGroupCorrectionTask'], [$dao->gid]);
+        $this->queue->createItem($task);
+      }
+
+      $msg = 'Running queue';
+      $this->runQueue('Import Groups');
+    }
+
+    return $msg;
+  }
+
+  public function importOrganizations() {
+    $msg = '';
+
+    // create queue
+    $this->createQueue();
+
+    if ($this->queue->numberOfItems() > 0) {
+      $msg = 'The queue is not empty: it contains ' . $this->queue->numberOfItems() . ' item(s).';
+    }
+    else {
+      $sql = "select id from tmpbeuc_orgs";
+      $dao = CRM_Core_DAO::executeQuery($sql);
+
+      while ($dao->fetch()) {
+        $task = new CRM_Queue_Task(['CRM_Beucimport_Helper', 'importOrganizationTask'], [$dao->id]);
         $this->queue->createItem($task);
       }
 
@@ -228,8 +249,6 @@ class CRM_Beucimport_Helper {
   }
 
   public function importPersons() {
-    $numItemsPerQueueRun = 20;
-
     $msg = '';
 
     // create queue
@@ -239,14 +258,12 @@ class CRM_Beucimport_Helper {
       $msg = 'The queue is not empty: it contains ' . $this->queue->numberOfItems() . ' item(s).';
     }
     else {
-      // count the number of items to import
-      $sql = "select count(*) from tmpbeuc_pers where ifnull(status, '') = ''";
-      $numItems = CRM_Core_DAO::singleValueQuery($sql);
+      // add the id's to the queue
+      $sql = "select id from tmpbeuc_pers";
+      $dao = CRM_Core_DAO::executeQuery($sql);
 
-      // fill the queue
-      $totalQueueRuns = ($numItems / $numItemsPerQueueRun) + 1;
-      for ($i = 0; $i < $totalQueueRuns; $i++) {
-        $task = new CRM_Queue_Task(['CRM_Beucimport_Helper', 'importPersonTask'], [$numItemsPerQueueRun]);
+      while ($dao->fetch()) {
+        $task = new CRM_Queue_Task(['CRM_Beucimport_Helper', 'importPersonTask'], [$dao->id]);
         $this->queue->createItem($task);
       }
 
@@ -257,7 +274,7 @@ class CRM_Beucimport_Helper {
     return $msg;
   }
 
-  public static function importOrganizationTask(CRM_Queue_TaskContext $ctx, $limit) {
+  public static function importOrganizationTask(CRM_Queue_TaskContext $ctx, $id) {
     static $custom_field_media_type = '';
     static $custom_field_media_country = '';
 
@@ -281,13 +298,11 @@ class CRM_Beucimport_Helper {
       left outer join 
         civicrm_country c on o.country_iso_code = c.iso_code
       where 
-        ifnull(status, '') = ''
-      limit
-        0, $limit
+        o.id = $id
     ";
     $dao = CRM_Core_DAO::executeQuery($sql);
 
-    while ($dao->fetch()) {
+    if ($dao->fetch()) {
       // see if we have this contact
       $params = [
         'sequential' => 1,
@@ -309,8 +324,8 @@ class CRM_Beucimport_Helper {
           $params[$custom_field_media_type] = $dao->media_type_id;
         }
 
-        if ($dao->press_country_iso_code) {
-          $params[$custom_field_media_country] = $dao->press_country_iso_code;
+        if ($dao->media_country_iso_code) {
+          $params[$custom_field_media_country] = $dao->media_country_iso_code;
         }
 
         // add website
@@ -350,6 +365,39 @@ class CRM_Beucimport_Helper {
     return TRUE;
   }
 
+  public static function importGroupCorrectionTask(CRM_Queue_TaskContext $ctx, $gid) {
+    // select the group correction
+    $sql = "select * from tmpbeuc_group_member_corrections where gid = $gid";
+    $groupCorrection = CRM_Core_DAO::executeQuery($sql);
+    $groupCorrection->fetch();
+
+    // add_contacts_to can contain more than 1 id
+    $targetGIDs = explode(', ', $groupCorrection->add_contacts_to);
+    foreach ($targetGIDs as $targetGID) {
+      // get the civicrm group id of this gid
+      $civiGroupIDgid = CRM_Core_DAO::singleValueQuery("select g.id from tmpbeuc_groups tg inner join civicrm_group g on tg.`group` = g.title where tg.gid = " . $targetGID);
+
+      // select the group members
+      $sql = "select * from tmpbeuc_group_members where gid = $gid";
+      $dao = CRM_Core_DAO::executeQuery($sql);
+      while ($dao->fetch()) {
+        // lookup the contact
+        $result = civicrm_api3('Contact', 'get', ['external_identifier' => 'uid_' . $dao->uid, 'sequential' => 1]);
+        if ($result['count'] == 0) {
+          watchdog('import group member', 'uid ' . $dao->uid . 'not found');
+        }
+        else {
+          civicrm_api3('GroupContact', 'create', [
+            'group_id' => $civiGroupIDgid,
+            'contact_id' => $result['values'][0]['id'],
+          ]);
+        }
+      }
+    }
+
+    return TRUE;
+  }
+
   public static function importGroupTask(CRM_Queue_TaskContext $ctx, $gid) {
     // select the name of the group
     $sql = "select `group` from tmpbeuc_groups where gid = $gid";
@@ -383,28 +431,29 @@ class CRM_Beucimport_Helper {
     return TRUE;
   }
 
-  public static function importPersonTask(CRM_Queue_TaskContext $ctx, $limit) {
+  public static function importPersonTask(CRM_Queue_TaskContext $ctx, $id) {
     $sql = "
       select
         p.*
         , ov.value prefix_id
+        , c.id as country_id
       from
         tmpbeuc_pers p
       left outer join
         civicrm_option_value ov on p.title = ov.name and option_group_id = 6
+      left outer join 
+        civicrm_country c on p.country_iso_code = c.iso_code        
       where 
-        ifnull(status, '') = ''
-      limit
-        0, $limit        
+         p.id = $id
     ";
     $dao = CRM_Core_DAO::executeQuery($sql);
 
-    while ($dao->fetch()) {
+    if ($dao->fetch()) {
       // skip if it's empty
       if (!$dao->first_name && !$dao->last_name && !$dao->email) {
         $updateSQL = "update tmpbeuc_pers set status = 'O' where external_identifier = '" . $dao->external_identifier . "'";
         CRM_Core_DAO::executeQuery($updateSQL);
-        continue;
+        return TRUE;
       }
 
       // see if we have this contact
@@ -474,7 +523,42 @@ class CRM_Beucimport_Helper {
           ];
         }
 
+        // add the address if it's different from the employer address
+        if ($dao->aid) {
+          $createNewAddress = FALSE;
+
+          // get the address of the employer
+          $emplID = $params['employer_id'] ? $params['employer_id'] : 0;
+          $employerAddress = civicrm_api3('Address', 'get', ['sequential' => 1, 'contact_id' => $emplID, 'is_primary' => 1]);
+          if ($employerAddress['count'] > 0) {
+            // compare the address fields
+            if ($employerAddress['values'][0]['street_address'] != $dao->street_address) $createNewAddress = TRUE;
+            if ($employerAddress['values'][0]['supplemental_address_1'] != $dao->supplemental_address_1) $createNewAddress = TRUE;
+            if ($employerAddress['values'][0]['city'] != $dao->city) $createNewAddress = TRUE;
+            if ($employerAddress['values'][0]['postal_code'] != $dao->postal_code) $createNewAddress = TRUE;
+            if ($employerAddress['values'][0]['country_id'] != $dao->country_id) $createNewAddress = TRUE;
+          }
+          else {
+            // employer has no address
+            $createNewAddress = TRUE;
+          }
+
+          if ($createNewAddress) {
+            // add address
+            $params['api.Address.create'] = [
+              'location_type_id' => 2,
+              'is_primary' => 1,
+              'street_address' => $dao->street_address,
+              'supplemental_address_1' => $dao->supplemental_address_1,
+              'city' => $dao->city,
+              'postal_code' => $dao->postal_code,
+              'country_id' => $dao->country_id,
+            ];
+          }
+        }
+
         $c = civicrm_api3('Contact', 'create', $params);
+
 
         // add phone numbers
         self::addPhoneNumbers($c['id'], $dao->external_identifier);

@@ -27,6 +27,9 @@ class CRM_Beucimport_Page_BeucImportExecute extends CRM_Core_Page {
       elseif ($action == 'importGroups') {
         $msg = $importHelper->importGroups();
       }
+      elseif ($action == 'importGroupCorrections') {
+        $msg = $importHelper->importGroupCorrections();
+      }
       else {
         $msg = 'Error: Unknown action';
       }
