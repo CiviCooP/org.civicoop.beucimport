@@ -92,6 +92,22 @@ class CRM_Beucimport_Helper {
 
     // create custom fields for press
     $msg[] = "=== Checking Custom Fields for Press ===";
+
+    $result = civicrm_api3('CustomField', 'get', ['label' => "EU Media"]);
+    if ($result['count'] == 0) {
+      $result = civicrm_api3('CustomField', 'create', [
+        'custom_group_id' => $groupID,
+        'label' => "EU Media",
+        'data_type' => "Boolean",
+        'is_searchable' => 1,
+        'is_active' => 1,
+        'column_name' => "eu_media",
+        'html_type' => "Radio",
+      ]);
+
+      $msg[] = 'Create custom field Media Country';
+    }
+
     $result = civicrm_api3('CustomField', 'get', ['label' => "Media Country"]);
     if ($result['count'] == 0) {
       $result = civicrm_api3('CustomField', 'create', [
@@ -277,6 +293,7 @@ class CRM_Beucimport_Helper {
   public static function importOrganizationTask(CRM_Queue_TaskContext $ctx, $id) {
     static $custom_field_media_type = '';
     static $custom_field_media_country = '';
+    static $custom_field_eu_media = '';
 
     // get custom field id's
     if ($custom_field_media_type == '') {
@@ -284,6 +301,9 @@ class CRM_Beucimport_Helper {
     }
     if ($custom_field_media_country == '') {
       $custom_field_media_country = 'custom_' . civicrm_api3('CustomField', 'getsingle', ['return' => ["id"], 'custom_group_id' => "press", 'name' => "media_country"])['id'];
+    }
+    if ($custom_field_eu_media == '') {
+      $custom_field_eu_media = 'custom_' . civicrm_api3('CustomField', 'getsingle', ['return' => ["id"], 'custom_group_id' => "press", 'name' => "eu_media"])['id'];
     }
 
     $sql = "
@@ -325,7 +345,13 @@ class CRM_Beucimport_Helper {
         }
 
         if ($dao->media_country_iso_code) {
-          $params[$custom_field_media_country] = $dao->media_country_iso_code;
+          if (strtolower($dao->media_country_iso_code) == 'ye') {
+            // yemen is a fake media country to mark the press org to be "eu wide"
+            $params[$custom_field_eu_media] = 1;
+          }
+          else {
+            $params[$custom_field_media_country] = $dao->media_country_iso_code;
+          }
         }
 
         // add website
