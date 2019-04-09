@@ -187,6 +187,81 @@ class CRM_Beucimport_Helper {
 
   }
 
+  public function setupEU() {
+    $orgSubTypes = ['EC DG', 'EC Unit', 'EC Dir', 'EC Cab', 'EP Secretariat General', 'EP Committee'];
+    foreach ($orgSubTypes as $subType) {
+      $params = [
+        'sequential' => 1,
+        'name' => str_replace(' ', '_', $subType),
+      ];
+      $result = civicrm_api3('ContactType', 'get', $params);
+      if ($result['count'] == 0) {
+        // create sub type
+        $params['label'] = $subType;
+        $params['parent_id'] = 3;
+        $params['is_active'] = 1;
+        civicrm_api3('ContactType', 'create', $params);
+      }
+    }
+
+    // delete disabled relationship types
+    $sql = "delete from civicrm_relationship_type where is_reserved is null and is_active = 0";
+    CRM_Core_DAO::executeQuery($sql);
+
+    // create EC relationship types
+    $relTypes = [
+      ['Commissioner', 'EC_Cab'],
+      ['Director', 'EC_Dir'],
+      ['Director General', 'EC_DG'],
+      ['Head of Unit', 'EC_Unit'],
+      ['Deputy Head of Unit', 'EC_Unit'],
+      ['Head of Cabinet', 'EC_Cab'],
+      ['Deputy Head of Cabinet', 'EC_Cab'],
+      ['Deputy Director General', 'EC_DG'],
+      ['Working at', ''],
+    ];
+
+    foreach ($relTypes as $relType) {
+      // see if the rel type exists
+      $sql = "select id from civicrm_relationship_type where name_a_b = %1";
+      $sqlParams = [1 => [$relType[0], 'String']];
+      if (CRM_Core_DAO::singleValueQuery($sql, $sqlParams)) {
+        // already exists
+      }
+      else {
+        $params = [
+          'name_a_b' => $relType[0],
+          'label_a_b' => $relType[0],
+          'name_b_a' => $relType[0],
+          'label_b_a' => $relType[0],
+          'contact_type_a' => 'Individual',
+          'contact_type_b' => 'Organization',
+          'contact_sub_type_b' => $relType[1],
+          'is_active' => 1,
+        ];
+
+        civicrm_api3('RelationshipType', 'create', $params);
+      }
+    }
+
+    // create group for errors
+    $groupName = 'ec_check';
+    $groupTitle = 'EC Check manually';
+    $groupDescription = 'Invalid relationship during import';
+    $params = [
+      'name' => $groupName,
+    ];
+    $grp = civicrm_api3('Group', 'get', $params);
+    if ($grp['count'] == 0) {
+      $params['is_active'] = 1;
+      $params['title'] = $groupTitle;
+      $params['description'] = $groupDescription;
+      civicrm_api3('Group', 'create', $params);
+    }
+
+    return 'OK';
+  }
+
   public function importGroups() {
     $msg = '';
 
@@ -622,6 +697,184 @@ class CRM_Beucimport_Helper {
       ];
       civicrm_api3('Phone', 'create', $params);
     }
+  }
+
+  public function importDGs() {
+    $msg = '';
+
+    // create queue
+    $this->createQueue();
+
+    if ($this->queue->numberOfItems() > 0) {
+      $msg = 'The queue is not empty: it contains ' . $this->queue->numberOfItems() . ' item(s).';
+    }
+    else {
+      $sql = "select * from tmpbeuc_dgs";
+      $dao = CRM_Core_DAO::executeQuery($sql);
+
+      // fill the queue with group id's
+      while ($dao->fetch()) {
+        $task = new CRM_Queue_Task(['CRM_Beucimport_Helper', 'importDGTask'], [$dao->external_identifier]);
+        $this->queue->createItem($task);
+      }
+
+      $msg = 'Running queue';
+      $this->runQueue('Import DGs');
+    }
+
+    return $msg;
+  }
+
+  public function importEPcomms() {
+    $msg = '';
+
+    // create queue
+    $this->createQueue();
+
+    if ($this->queue->numberOfItems() > 0) {
+      $msg = 'The queue is not empty: it contains ' . $this->queue->numberOfItems() . ' item(s).';
+    }
+    else {
+      $sql = "select * from tmpbeuc_ep_committees where contact_sub_type is not null";
+      $dao = CRM_Core_DAO::executeQuery($sql);
+
+      // fill the queue with group id's
+      while ($dao->fetch()) {
+        $task = new CRM_Queue_Task(['CRM_Beucimport_Helper', 'importEPcommsTask'], [$dao->gid]);
+        $this->queue->createItem($task);
+      }
+
+      $msg = 'Running queue';
+      $this->runQueue('Import EP Committees');
+    }
+
+    return $msg;
+  }
+
+  public static function importEPcommsTask(CRM_Queue_TaskContext $ctx, $gid) {
+    // select the committee
+    $sql = "select * from tmpbeuc_ep_committees where gid = $gid";
+    $dao = CRM_Core_DAO::executeQuery($sql);
+    $dao->fetch();
+
+    // check if we have the contact
+    $params = [
+      'external_identifier' => $dao->external_identifier,
+      'sequential' => 1,
+    ];
+    $committee = civicrm_api3('Contact', 'get', $params);
+    if ($committee['count'] == 0) {
+      // create the EP committee
+      $params['organization_name'] = $dao->organization_name;
+      $params['contact_type'] = 'Organization';
+      $params['contact_sub_type'] = str_replace(' ', '_', $dao->contact_sub_type);
+      $committee = civicrm_api3('Contact', 'create', $params);
+    }
+    $committeeID = $committee['values'[0]['id']];
+
+    // lookup the groups that have to be copies to this group
+    $groupIDs = CRM_Core_DAO::singleValueQuery("select group_concat(gid) from tmpbeuc_ep_committees where copy_contacts_to = $gid");
+    if ($groupIDs) {
+      $groupIDs = $gid . ',' . $groupIDs;
+    }
+    else {
+      $groupIDs = $gid;
+    }
+
+    // select all contacts in this group
+    $sql = "select * from tmpbeuc_ep_contacts where gid in ($groupIDs)";
+
+
+    return TRUE;
+  }
+
+  public static function importDGTask(CRM_Queue_TaskContext $ctx, $ext_id) {
+    $workingAt = CRM_Core_DAO::singleValueQuery("select id from civicrm_relationship_type where name_a_b = 'Working at'");
+
+    // select the name of the group
+    $sql = "
+      select
+        dg.*
+        , c.id contact_id
+      from
+        tmpbeuc_dgs dg
+      left outer join
+        civicrm_contact c on c.external_identifier = dg.external_identifier
+      where
+        dg.external_identifier = '$ext_id'
+    ";
+    $dgDao = CRM_Core_DAO::executeQuery($sql);
+    $dgDao->fetch();
+
+    // see if we have the dg
+    if ($dgDao->contact_id) {
+      // yes, store the id
+      $dgID = $dgDao->contact_id;
+    }
+    else {
+      // no, create the org
+      $params = [
+        'organization_name' => $dgDao->organization_name,
+        'contact_type' => 'Organization',
+        'contact_sub_type' => str_replace(' ', '_', $dgDao->contact_sub_type),
+        'external_identifier' => $dgDao->external_identifier,
+        'sequential' => 1,
+      ];
+      $result = civicrm_api3('contact', 'create', $params);
+      $dgID = $result['values'][0]['id'];
+    }
+
+    // select the dg contacts
+    $sql = "select * from tmpbeuc_dg_contacts where ext_dg_id = '$ext_id'";
+    $dao = CRM_Core_DAO::executeQuery($sql);
+    while ($dao->fetch()) {
+      // lookup the contact
+      $contact = civicrm_api3('Contact', 'get', ['external_identifier' => $dao->ext_person_id, 'sequential' => 1]);
+      if ($contact['count'] == 0) {
+        watchdog('beuc', $dao->ext_person_id . ' not found');
+      }
+      else {
+        // select the rel. type id
+        $sql = "select id from civicrm_relationship_type where name_a_b = %1";
+        $sqlParams = [
+          1 => [str_replace('Acting ', '', $contact['values'][0]['job_title']), 'String'],
+        ];
+        $relTypeID = CRM_Core_DAO::singleValueQuery($sql, $sqlParams);
+
+        if (!$relTypeID) {
+          $relTypeID = $workingAt;
+        }
+
+        try {
+          // create the relationship
+          $params = [
+            'contact_id_a' => $contact['values'][0]['id'],
+            'contact_id_b' => $dgID,
+            'relationship_type_id' => $relTypeID,
+            'is_active' => 1,
+
+          ];
+          civicrm_api3('Relationship', 'create', $params);
+        }
+        catch (CiviCRM_API3_Exception $e) {
+          if ($e->getMessage() == 'Invalid Relationship') {
+            // add to group to check manually
+            civicrm_api3('GroupContact', 'create', [
+              'contact_id' => $contact['values'][0]['id'],
+              'group_id' => 'ec_check',
+            ]);
+          }
+          elseif ($e->getMessage() == 'Duplicate Relationship') {
+            // ignore
+          }
+          else {
+            watchdog('beuc', $contact['values'][0]['id'] . ' - ' . $dgID . ' | ' . $e->getMessage());
+          }
+        }
+      }
+    }
+
+    return TRUE;
   }
 
   public static function getOrganizationFromExternalID($external_identifier) {

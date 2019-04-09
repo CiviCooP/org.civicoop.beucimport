@@ -30,8 +30,17 @@ class CRM_Beucimport_Page_BeucImportExecute extends CRM_Core_Page {
       elseif ($action == 'importGroupCorrections') {
         $msg = $importHelper->importGroupCorrections();
       }
+      elseif ($action == 'setupEU') {
+        $msg = $importHelper->setupEU();
+      }
+      elseif ($action == 'importDGs') {
+        $msg = $importHelper->importDGs();
+      }
+      elseif ($action == 'importEPcomms') {
+        $msg = $importHelper->importEPcomms();
+      }
       else {
-        $msg = 'Error: Unknown action';
+        $msg = "Error: Unknown action: $action";
       }
     }
     catch (Exception $e) {
