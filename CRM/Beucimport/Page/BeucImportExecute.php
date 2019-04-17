@@ -39,6 +39,9 @@ class CRM_Beucimport_Page_BeucImportExecute extends CRM_Core_Page {
       elseif ($action == 'importEPcomms') {
         $msg = $importHelper->importEPcomms();
       }
+      elseif ($action == 'importLast') {
+        $msg = $importHelper->importLastStuff();
+      }
       else {
         $msg = "Error: Unknown action: $action";
       }

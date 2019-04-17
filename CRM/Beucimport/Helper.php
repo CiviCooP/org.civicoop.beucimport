@@ -855,6 +855,90 @@ class CRM_Beucimport_Helper {
     return TRUE;
   }
 
+  public function importLastStuff() {
+    $msg = '';
+
+    $groups = [
+      [1388,'European Conservatives and Reformists Group (ECR)'],
+      [641,'S&D Group'],
+      [1294,'Group of the Greens/European Free Alliance (Greens/ALE)'],
+      [1292,'Group of the European People\'s Party (EPP-ED)'],
+      [642,'Group of the Alliance of Liberals & Democrats for Europe (ALDE)'],
+      [643,'Group of Non-attached Members (NA/NI)'],
+      [1707,'Group of Europe of Nations and Freedom Group (ENF)'],
+      [1387,'Group of Europe of Freedom and Direct Democracy Group (EFDD)'],
+      [646,'Group of the European United Left - Nordic Green Left (GUE/NG)'],
+      [354,'Sweden'],
+      [353,'Spain'],
+      [352,'Slovenia'],
+      [351,'Slovak Republic'],
+      [1348,'Romania'],
+      [350,'Portugal'],
+      [349,'Poland'],
+      [347,'Malta'],
+      [346,'Luxembourg'],
+      [345,'Lithuania'],
+      [344,'Latvia'],
+      [343,'Italy'],
+      [342,'Ireland'],
+      [341,'Hungary'],
+      [340,'Greece'],
+      [339,'Germany'],
+      [338,'France'],
+      [337,'Finland'],
+      [336,'Estonia'],
+      [348,'Netherlands'],
+      [335,'Denmark'],
+      [334,'Czech Republic'],
+      [333,'Cyprus'],
+      [1494,'Croatia'],
+      [355,'United Kingdom'],
+      [332,'Belgium'],
+      [331,'Austria'],
+      [1347,'Bulgaria'],
+    ];
+
+    foreach ($groups as $group) {
+      // find the group
+      $params = [
+        'title' => $group[1],
+        'sequential' => 1,
+      ];
+      $grp = civicrm_api3('Group', 'get', $params);
+      if ($grp['count'] == 0) {
+        $params['is_active'] = 1;
+        $grp = civicrm_api3('Group', 'create', $params);
+        $groupID = $grp['values'][0]['id'];
+      }
+      else {
+        $groupID = $grp['values'][0]['id'];
+      }
+
+      // add group members
+      $sql = "select * from tmpbeuc_group_members where gid = " . $group[0];
+      $dao = CRM_Core_DAO::executeQuery($sql);
+      while ($dao->fetch()) {
+        // get the contact
+        $paramsContact = [
+          'external_identifier' => 'uid_' . $dao->uid,
+          'sequential' => 1,
+        ];
+        $c = civicrm_api3('Contact', 'get', $paramsContact);
+        if ($c['count'] > 0) {
+          civicrm_api3('GroupContact', 'create', [
+            'group_id' => $groupID,
+            'contact_id' => $c['values'][0]['id'],
+          ]);
+        }
+        else {
+          watchdog('beuc', 'contact not found: ' . $dao->uid);
+        }
+      }
+    }
+
+    return $msg;
+  }
+
   public static function importDGTask(CRM_Queue_TaskContext $ctx, $ext_id) {
     $workingAt = CRM_Core_DAO::singleValueQuery("select id from civicrm_relationship_type where name_a_b = 'Working at'");
 
