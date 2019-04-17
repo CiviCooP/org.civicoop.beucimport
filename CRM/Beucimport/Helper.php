@@ -208,7 +208,7 @@ class CRM_Beucimport_Helper {
     $sql = "delete from civicrm_relationship_type where is_reserved is null and is_active = 0";
     CRM_Core_DAO::executeQuery($sql);
 
-    // create EC relationship types
+    // create EC and EP relationship types
     $relTypes = [
       ['Commissioner', 'EC_Cab'],
       ['Director', 'EC_Dir'],
@@ -219,6 +219,16 @@ class CRM_Beucimport_Helper {
       ['Deputy Head of Cabinet', 'EC_Cab'],
       ['Deputy Director General', 'EC_DG'],
       ['Working at', ''],
+      ['Administrator', 'EP_Committee'],
+      ['Adviser', 'EP_Committee'],
+      ['Working at', 'EP_Committee'],
+      ['Secretariat', 'EP_Committee'],
+      ['Member', 'EP_Committee'],
+      ['Substitute', 'EP_Committee'],
+      ['Vice-Chair', 'EP_Committee'],
+      ['Chair', 'EP_Committee'],
+      ['Coordinator', 'EP_Committee'],
+      ['Political Adviser', 'EP_Committee'],
     ];
 
     foreach ($relTypes as $relType) {
@@ -770,9 +780,9 @@ class CRM_Beucimport_Helper {
       $params['contact_sub_type'] = str_replace(' ', '_', $dao->contact_sub_type);
       $committee = civicrm_api3('Contact', 'create', $params);
     }
-    $committeeID = $committee['values'[0]['id']];
+    $committeeID = $committee['values'][0]['id'];
 
-    // lookup the groups that have to be copies to this group
+    // lookup the groups that have to be copied to this group
     $groupIDs = CRM_Core_DAO::singleValueQuery("select group_concat(gid) from tmpbeuc_ep_committees where copy_contacts_to = $gid");
     if ($groupIDs) {
       $groupIDs = $gid . ',' . $groupIDs;
@@ -783,7 +793,64 @@ class CRM_Beucimport_Helper {
 
     // select all contacts in this group
     $sql = "select * from tmpbeuc_ep_contacts where gid in ($groupIDs)";
+    $dao = CRM_Core_DAO::executeQuery($sql);
+    while ($dao->fetch()) {
+      // lookup the contact
+      $contact = civicrm_api3('Contact', 'get', [
+        'external_identifier' => 'uid_' . $dao->uid,
+        'sequential' => 1
+      ]);
+      if ($contact['count'] == 0) {
+        watchdog('beuc', 'uid_' . $dao->uid . ' not found');
+      }
+      else {
+        // select the rel. type id
+        $sql = "select id from civicrm_relationship_type where name_a_b = %1";
 
+        if ($dao->default_relationship) {
+          $relName = $dao->default_relationship;
+        }
+        else {
+          $relName = $dao->relationship_type;
+        }
+
+        $sqlParams = [
+          1 => [$relName, 'String'],
+        ];
+        $relTypeID = CRM_Core_DAO::singleValueQuery($sql, $sqlParams);
+
+        if (!$relTypeID) {
+          throw new Exception("relationship type not found: $relName");
+        }
+
+        try {
+          // create the relationship
+          $params = [
+            'contact_id_a' => $contact['values'][0]['id'],
+            'contact_id_b' => $committeeID,
+            'relationship_type_id' => $relTypeID,
+            'is_active' => 1,
+
+          ];
+          civicrm_api3('Relationship', 'create', $params);
+        }
+        catch (CiviCRM_API3_Exception $e) {
+          if ($e->getMessage() == 'Invalid Relationship') {
+            // add to group to check manually
+            civicrm_api3('GroupContact', 'create', [
+              'contact_id' => $contact['values'][0]['id'],
+              'group_id' => 'ec_check',
+            ]);
+          }
+          elseif ($e->getMessage() == 'Duplicate Relationship') {
+            // ignore
+          }
+          else {
+            watchdog('beuc', $contact['values'][0]['id'] . ' - ' . $committeeID . ' | ' . $e->getMessage());
+          }
+        }
+      }
+    }
 
     return TRUE;
   }
@@ -814,7 +881,7 @@ class CRM_Beucimport_Helper {
     else {
       // no, create the org
       $params = [
-        'organization_name' => $dgDao->organization_name,
+        'organization_name' => substr($dgDao->organization_name, 0, 128),
         'contact_type' => 'Organization',
         'contact_sub_type' => str_replace(' ', '_', $dgDao->contact_sub_type),
         'external_identifier' => $dgDao->external_identifier,
