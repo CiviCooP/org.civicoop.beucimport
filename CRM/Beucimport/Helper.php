@@ -14,159 +14,111 @@ class CRM_Beucimport_Helper {
     return $msg;
   }
 
-  public function createConfiguration() {
+  public function getCommitteeIDs() {
     $msg = [];
 
     // create contact types
-    $msg[] = "=== Checking Contact Sub Types ===";
+    $msg[] = "=== Getting committee ID's ===";
     $sql = "
       select
-        distinct t.contact_sub_type
+        distinct t.committee
       from
-        tmpbeuc_orgs t
-      where
-        not exists (
-          select * from civicrm_contact_type ct where ct.name = t.contact_sub_type
-        )
-        and ifnull(t.contact_sub_type, '') <> ''
+        tmp_committee t
     ";
     $dao = CRM_Core_DAO::executeQuery($sql);
     while ($dao->fetch()) {
-      $params = [
-        'name' => $dao->contact_sub_type,
-        'label' => str_replace('_', ' ', $dao->contact_sub_type),
-        'parent_id' => 'Organization',
-        'is_active' => 1,
+      // see if we have this committee
+      $sqlComm = "select id from civicrm_contact where contact_sub_type = 'EP_Committee' and organization_name like %1";
+      $sqlCommParams = [
+        1 => ['%' . $dao->committee . '%', 'String'],
       ];
-      civicrm_api3('ContactType', 'create', $params);
-      $msg[] = 'Create subtype ' . $dao->contact_sub_type;
-    }
+      $commDAO = CRM_Core_DAO::executeQuery($sqlComm, $sqlCommParams);
+      if ($commDAO->fetch()) {
+        // OK, the committee exists in civi, store its ID in the temp table
+        $sqlUpdate = "update tmp_committee set committee_id = %2 where committee = %1";
+        $sqlUpdateParams = [
+          1 => [$dao->committee, 'String'],
+          2 => [$commDAO->id , 'Integer'],
+        ];
+        CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
+        $msg[] = 'Update ID for ' . $dao->committee;
+      }
+      else {
+        // Committee does not exist, create it
+        $params = [
+          'sequential' => 1,
+          'contact_type' => 'Organization',
+          'contact_sub_type' => 'EP_Committee',
+          'organization_name' => 'Committee on ' . $dao->committee,
+        ];
+        $comm = civicrm_api3('Contact', 'create', $params);
+        $msg[] = 'Create committee ' . $dao->committee;
 
-    // create tags
-    $msg[] = "=== Checking Tags ===";
-    $sql = "
-      select
-        distinct tag
-      from
-        tmpbeuc_orgs t
-      where
-        not exists (
-          select * from civicrm_tag ct where ct.name = t.tag
-        )
-        and ifnull(t.tag, '') <> ''
-    ";
-    $dao = CRM_Core_DAO::executeQuery($sql);
-    while ($dao->fetch()) {
-      $params = [
-        'name' => $dao->tag,
-        'used_for' => 'civicrm_contact',
-      ];
-      civicrm_api3('Tag', 'create', $params);
-
-      $msg[] = 'Create tag ' . $dao->tag;
+        $sqlUpdate = "update tmp_committee set committee_id = %2 where committee = %1";
+        $sqlUpdateParams = [
+          1 => [$dao->committee, 'String'],
+          2 => [$comm['id'] , 'Integer'],
+        ];
+        CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
+        $msg[] = 'Update ID for ' . $dao->committee;
+      }
     }
 
     if (count($msg) == 0) {
       $msg[] = 'OK';
     }
 
-    // create custom group press
-    $msg[] = "=== Checking Custom Group Press ===";
-    $result = civicrm_api3('CustomGroup', 'get', ['title' => "Press", 'sequential' => 1]);
-    if ($result['count'] == 0) {
-      $result = civicrm_api3('CustomGroup', 'create', [
-        'title' => "Press",
-        'extends' => "Organization",
-        'extends_entity_column_value' => ['Press_Organisation'],
-        'name' => "press",
-        'collapse_display' => 0,
-        'style' => "Inline",
-        'table_name' => "civicrm_value_press",
+    return $msg;
+  }
+
+  public function disableMEPs() {
+    $msg = [];
+
+    // disable stuff
+    $msg[] = "=== Disabling old MEPs: Committees ===";
+    $sql = "
+      update civicrm_relationship 
+      set end_date = '2019-05-31', is_active = 0
+      where contact_id_b in (
+        select id from civicrm_contact
+        where contact_sub_type = 'EP_Committee'
+      )
+      and start_date is null and end_date is null
+    ";
+    $dao = CRM_Core_DAO::executeQuery($sql);
+
+    $msg[] = "=== Disabling old MEPs: Employer ===";
+    $sql = "
+      select distinct contact_id_a
+      from civicrm_relationship
+      where
+      end_date = '2019-05-31'
+    ";
+    $dao = CRM_Core_DAO::executeQuery($sql);
+    while ($dao->fetch()) {
+      // get the employer relationship
+      $params = [
         'sequential' => 1,
-      ]);
-
-      $msg[] = 'Create custom group Press';
-    }
-
-    $groupID = $result['values'][0]['id'];
-
-    // create custom fields for press
-    $msg[] = "=== Checking Custom Fields for Press ===";
-
-    $result = civicrm_api3('CustomField', 'get', ['label' => "EU Media"]);
-    if ($result['count'] == 0) {
-      $result = civicrm_api3('CustomField', 'create', [
-        'custom_group_id' => $groupID,
-        'label' => "EU Media",
-        'data_type' => "Boolean",
-        'is_searchable' => 1,
+        'contact_id_a' => $dao->contact_id_a,
+        'contact_id_b' => 326,
+        'relationship_type_id' => 5,
         'is_active' => 1,
-        'column_name' => "eu_media",
-        'html_type' => "Radio",
-      ]);
-
-      $msg[] = 'Create custom field Media Country';
+      ];
+      $rel = civicrm_api3('Relationship','get', $params);
+      if ($rel['count'] > 0) {
+        // disable employer relationship
+        $relParams = [
+          'sequential' => 1,
+          'id' => $rel['values'][0]['id'],
+          'is_active' => 0,
+          'end_date' => '2019-05-31',
+        ];
+        civicrm_api3('Relationship','create', $relParams);
+      }
     }
 
-    $result = civicrm_api3('CustomField', 'get', ['label' => "Media Country"]);
-    if ($result['count'] == 0) {
-      $result = civicrm_api3('CustomField', 'create', [
-        'custom_group_id' => $groupID,
-        'label' => "Media Country",
-        'data_type' => "Country",
-        'is_searchable' => 1,
-        'is_active' => 1,
-        'column_name' => "media_country",
-        'html_type' => "Select",
-      ]);
-
-      $msg[] = 'Create custom field Media Country';
-    }
-
-    // create the option group for custom field media type
-    $result = civicrm_api3('OptionGroup', 'get', ['name' => "media_type_list", 'sequential' => 1]);
-    if ($result['count'] == 0) {
-      $result = civicrm_api3('OptionGroup', 'create', [
-        "name" => "media_type_list",
-        "title" => "Media Type List",
-        "is_reserved" => "0",
-        "is_active" => "1",
-        "is_locked" => "0",
-        'sequential' => 1,
-      ]);
-    }
-    $listID = $result['values'][0]['id'];
-
-    // add the option items
-    $this->createOptionListItem($listID, 1, 'News Agency'); 
-    $this->createOptionListItem($listID, 2, 'Newspaper');
-    $this->createOptionListItem($listID, 3, 'Magazine');
-    $this->createOptionListItem($listID, 4, 'TV');
-    $this->createOptionListItem($listID, 5, 'Radio');
-    $this->createOptionListItem($listID, 6, 'Weekly');
-    $this->createOptionListItem($listID, 7, 'Online');
-    $this->createOptionListItem($listID, 8, 'Blog');
-    $this->createOptionListItem($listID, 9, 'Broadcaster');
-
-    // create custom field for media type
-    $result = civicrm_api3('CustomField', 'get', ['label' => "Media Type"]);
-    if ($result['count'] == 0) {
-      $result = civicrm_api3('CustomField', 'create', [
-        'custom_group_id' => $groupID,
-        'label' => "Media Type",
-        'name' => 'media_type',
-        'data_type' => 'Int',
-        'html_type' => 'Radio',
-        'is_required' => '0',
-        'is_searchable' => '1',
-        'is_search_range' => '0',
-        'is_active' => '1',
-        'options_per_line' => '1',
-        'column_name' => 'media_type',
-        'option_group_id' => $listID,
-      ]);
-
-      $msg[] = 'Create custom field Media Type';
+    if (count($msg) == 0) {
+      $msg[] = 'OK';
     }
 
     return $msg;

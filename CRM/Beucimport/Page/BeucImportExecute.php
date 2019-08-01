@@ -15,32 +15,17 @@ class CRM_Beucimport_Page_BeucImportExecute extends CRM_Core_Page {
       if ($action == 'createConfig') {
         $msg = $importHelper->createConfiguration();
       }
-      elseif ($action == 'importOrganizations') {
-        $msg = $importHelper->importOrganizations();
-      }
-      elseif ($action == 'importPersons') {
-        $msg = $importHelper->importPersons();
-      }
       elseif ($action == 'deleteQueue') {
         $msg = $importHelper->deleteQueue();
       }
-      elseif ($action == 'importGroups') {
-        $msg = $importHelper->importGroups();
+      elseif ($action == 'getCommitteeIDs') {
+        $msg = $importHelper->getCommitteeIDs();
       }
-      elseif ($action == 'importGroupCorrections') {
-        $msg = $importHelper->importGroupCorrections();
+      elseif ($action == 'disableMEPs') {
+        $msg = $importHelper->disableMEPs();
       }
-      elseif ($action == 'setupEU') {
-        $msg = $importHelper->setupEU();
-      }
-      elseif ($action == 'importDGs') {
-        $msg = $importHelper->importDGs();
-      }
-      elseif ($action == 'importEPcomms') {
-        $msg = $importHelper->importEPcomms();
-      }
-      elseif ($action == 'importLast') {
-        $msg = $importHelper->importLastStuff();
+      elseif ($action == 'importMEPs') {
+        $msg = $importHelper->importMEPs();
       }
       else {
         $msg = "Error: Unknown action: $action";
