@@ -64,6 +64,58 @@ class CRM_Beucimport_Helper {
       }
     }
 
+    // fill in the relationships ID
+    $msg[] = "=== Getting relationship ID's ===";
+    $sql = "
+      select
+        distinct meprole
+      from
+        tmp_committee
+    ";
+    $dao = CRM_Core_DAO::executeQuery($sql);
+    while ($dao->fetch()) {
+      // get the corresponding relationship
+      $sqlRel = "
+        select id from civicrm_relationship_type
+        where 
+          name_a_b = %1
+      ";
+      $sqlRelParam = [
+        1 => [str_replace(', First', '', $dao->meprole), 'String'],
+      ];
+      $daoRel = CRM_Core_DAO::executeQuery($sqlRel, $sqlRelParam);
+      if ($daoRel->fetch()) {
+        $sqlUpdate = 'update tmp_committee set relationship_type_id = %1 where meprole = %2';
+        $sqlUpdateParams = [
+          1 => [$daoRel->id, 'Integer'],
+          2 => [$dao->meprole, 'String'],
+        ];
+        CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
+      }
+      else {
+        throw new Exception('Relationship ' . $dao->meprole . ' NOT FOUND!');
+      }
+    }
+
+    // fill in the group ID of the corresponding party
+    $msg[] = "=== Getting party/group ID's ===";
+    $sqlUpdate = "update tmp_committee set group_id = 104 where party = 'EPP'";
+    CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
+    $sqlUpdate = "update tmp_committee set group_id = 103 where party = 'Greens-EFA'";
+    CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
+    $sqlUpdate = "update tmp_committee set group_id = 101 where party = 'ECR'";
+    CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
+    $sqlUpdate = "update tmp_committee set group_id = 105 where party = 'RE'";
+    CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
+    $sqlUpdate = "update tmp_committee set group_id = 102 where party = 'S&D'";
+    CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
+    $sqlUpdate = "update tmp_committee set group_id = 107 where party = 'ID'";
+    CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
+    $sqlUpdate = "update tmp_committee set group_id = 109 where party = 'GUE-NGL'";
+    CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
+    $sqlUpdate = "update tmp_committee set group_id = 106 where party = 'NA' or party = ''";
+    CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
+
     if (count($msg) == 0) {
       $msg[] = 'OK';
     }
@@ -117,6 +169,10 @@ class CRM_Beucimport_Helper {
       }
     }
 
+    $msg[] = "=== Disabling old MEPs: change job title ===";
+    $sql = "update civicrm_contact set job_title = 'former MEP' where job_title = 'MEP' and ifnull(employer_id, 0) = 0";
+    CRM_Core_DAO::executeQuery($sql);
+
     if (count($msg) == 0) {
       $msg[] = 'OK';
     }
@@ -124,7 +180,97 @@ class CRM_Beucimport_Helper {
     return $msg;
   }
 
-  private function createOptionListItem($listID, $id, $label) {
+  public function importMEPs() {
+    $msg = '';
+
+    // create queue
+    $this->createQueue();
+
+    if ($this->queue->numberOfItems() > 0) {
+      $msg = 'The queue is not empty: it contains ' . $this->queue->numberOfItems() . ' item(s).';
+    }
+    else {
+      $sql = "select * from tmp_committee";
+      $dao = CRM_Core_DAO::executeQuery($sql);
+
+      // fill the queue with group id's
+      while ($dao->fetch()) {
+        $task = new CRM_Queue_Task(['CRM_Beucimport_Helper', 'importMepTask'], [$dao->id]);
+        $this->queue->createItem($task);
+      }
+
+      $msg = 'Running queue';
+      $this->runQueue('Import MEPs');
+    }
+
+    return $msg;
+  }
+
+  public static function importMepTask(CRM_Queue_TaskContext $ctx, $id) {
+    // select the name of the group
+    $sql = "select * from tmp_committee where id = $id";
+    $mepToImport = CRM_Core_DAO::executeQuery($sql);
+    if ($mepToImport->fetch()) {
+      $mepName = explode(' ', $mepToImport->name);
+      $mepFirstName = $mepName[0];
+      unset($mepName[0]);
+      $mepLastName = implode(' ', $mepName);
+
+      // see if the contact is in civi
+      $params = [
+        'sequential' => 1,
+        'first_name' => $mepFirstName,
+        'last_name' => $mepLastName,
+        'contact_type' => 'Individual',
+      ];
+      $c = civicrm_api3('Contact', 'get', $params);
+      if ($c['count'] == 0) {
+        // create the contact
+        $c = civicrm_api3('Contact', 'create', $params);
+        $contactID = $c['id'];
+      }
+      else {
+        // contact exists, get its ID
+        $contactID = $c['values'][0]['id'];
+      }
+
+      // create/update the relationship
+      $paramsRel = [
+        'sequential' => 1,
+        'contact_id_a' => $contactID,
+        'contact_id_b' => $mepToImport->committee_id,
+        'is_active' => 1,
+        'start_date' => '2019-06-01',
+        'relationship_type_id' => $mepToImport->relationship_type_id,
+      ];
+      $ret = civicrm_api3('Relationship', 'get', $paramsRel);
+      if ($ret['count'] == 0) {
+        civicrm_api3('Relationship', 'create', $paramsRel);
+      }
+
+      // update job title and employer
+      $params = [
+        'sequential' => 1,
+        'id' => $contactID,
+        'job_title' => 'MEP',
+        'employer_id' => 326,
+        'source' => 'import August 2019',
+      ];
+      civicrm_api3('Contact', 'create', $params);
+
+      // put contact in group corresponding to the political party
+      $params = [
+        'sequential' => 1,
+        'contact_id' => $contactID,
+        'group_id' => $mepToImport->group_id,
+      ];
+      civicrm_api3('GroupContact', 'create', $params);
+    }
+
+    return TRUE;
+  }
+
+    private function createOptionListItem($listID, $id, $label) {
     $name = str_replace(' ', '-', strtolower($label));
     $result = civicrm_api3('OptionValue', 'get', ['option_group_id' => $listID, 'name' => $name, 'sequential' => 1]);
     if ($result['count'] == 0) {
