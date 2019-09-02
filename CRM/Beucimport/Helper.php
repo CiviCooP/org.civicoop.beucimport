@@ -136,6 +136,7 @@ class CRM_Beucimport_Helper {
         where contact_sub_type = 'EP_Committee'
       )
       and start_date is null and end_date is null
+      and relationship_type_id in (51,48,49,50)
     ";
     $dao = CRM_Core_DAO::executeQuery($sql);
 
