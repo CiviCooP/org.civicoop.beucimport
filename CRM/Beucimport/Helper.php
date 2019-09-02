@@ -113,8 +113,17 @@ class CRM_Beucimport_Helper {
     CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
     $sqlUpdate = "update tmp_committee set group_id = 109 where party = 'GUE-NGL'";
     CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
-    $sqlUpdate = "update tmp_committee set group_id = 106 where party = 'NA' or party = ''";
+    $sqlUpdate = "update tmp_committee set group_id = 106 where party = 'NA' or ifnull(party, '') = ''";
     CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
+
+    // update the mep country id
+    $sql = "
+      update tmp_committee c 
+      inner join 
+      civicrm_group g on g.title = c.mep_country
+      set ep_country_id = g.id
+    ";
+    CRM_Core_DAO::executeQuery($sql);
 
     if (count($msg) == 0) {
       $msg[] = 'OK';
@@ -227,6 +236,21 @@ class CRM_Beucimport_Helper {
       $c = civicrm_api3('Contact', 'get', $params);
       if ($c['count'] == 0) {
         // create the contact
+        if ($mepToImport->prefix == 'Mr') {
+          $params['prefix_id'] = 3;
+          $params['gender_id'] = 2;
+        }
+        elseif ($mepToImport->prefix == 'Ms') {
+          $params['prefix_id'] = 2;
+          $params['gender_id'] = 1;
+        }
+        elseif ($mepToImport->prefix == 'Dr') {
+          $params['prefix_id'] = 4;
+        }
+        else {
+          $params['prefix_id'] = 5; // prof
+        }
+
         $c = civicrm_api3('Contact', 'create', $params);
         $contactID = $c['id'];
       }
@@ -266,6 +290,70 @@ class CRM_Beucimport_Helper {
         'group_id' => $mepToImport->group_id,
       ];
       civicrm_api3('GroupContact', 'create', $params);
+
+      // put contact in group corresponding to the country
+      if ($mepToImport->ep_country_id) {
+        $params = [
+          'sequential' => 1,
+          'contact_id' => $contactID,
+          'group_id' => $mepToImport->ep_country_id,
+        ];
+        civicrm_api3('GroupContact', 'create', $params);
+      }
+
+      // delete the work address
+      $sql = "delete from civicrm_address where contact_id = $contactID and location_type_id = 2";
+      CRM_Core_DAO::executeQuery($sql);
+
+      // add the work address
+      if ($mepToImport->street_address) {
+        $params = [
+          'sequential' => 1,
+          'contact_id' => $contactID,
+          'location_type_id' => 2,
+          'is_primary' => 1,
+          'street_address' => $mepToImport->street_address,
+          'supplemental_address_1' => $mepToImport->supplement_1,
+          'supplemental_address_2' => $mepToImport->supplement_2,
+          'city' => $mepToImport->city,
+          'postal_code' => $mepToImport->postal_code,
+          'country_id' => 1020,
+        ];
+        civicrm_api3('Address', 'create', $params);
+      }
+
+      // delete the work phone
+      $sql = "delete from civicrm_phone where contact_id = $contactID and location_type_id = 2";
+      CRM_Core_DAO::executeQuery($sql);
+
+      // add the work phone
+      if ($mepToImport->phone) {
+        $params = [
+          'sequential' => 1,
+          'contact_id' => $contactID,
+          'location_type_id' => 2,
+          'is_primary' => 1,
+          'phone' => $mepToImport->phone,
+          'phone_type_id' => 1,
+        ];
+        civicrm_api3('Phone', 'create', $params);
+      }
+
+      // delete the work email
+      $sql = "delete from civicrm_email where contact_id = $contactID and location_type_id = 2";
+      CRM_Core_DAO::executeQuery($sql);
+
+      // add the work phone
+      if ($mepToImport->email) {
+        $params = [
+          'sequential' => 1,
+          'contact_id' => $contactID,
+          'location_type_id' => 2,
+          'is_primary' => 1,
+          'email' => $mepToImport->email,
+        ];
+        civicrm_api3('Email', 'create', $params);
+      }
     }
 
     return TRUE;
