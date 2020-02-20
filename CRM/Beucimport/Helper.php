@@ -14,223 +14,38 @@ class CRM_Beucimport_Helper {
     return $msg;
   }
 
-  public function getCommitteeIDs() {
-    $msg = [];
 
-    // create contact types
-    $msg[] = "=== Getting committee ID's ===";
-    $sql = "
-      select
-        distinct t.committee
-      from
-        tmp_committee t
-    ";
-    $dao = CRM_Core_DAO::executeQuery($sql);
-    while ($dao->fetch()) {
-      // see if we have this committee
-      $sqlComm = "select id from civicrm_contact where contact_sub_type = 'EP_Committee' and organization_name like %1";
-      $sqlCommParams = [
-        1 => ['%' . $dao->committee . '%', 'String'],
-      ];
-      $commDAO = CRM_Core_DAO::executeQuery($sqlComm, $sqlCommParams);
-      if ($commDAO->fetch()) {
-        // OK, the committee exists in civi, store its ID in the temp table
-        $sqlUpdate = "update tmp_committee set committee_id = %2 where committee = %1";
-        $sqlUpdateParams = [
-          1 => [$dao->committee, 'String'],
-          2 => [$commDAO->id , 'Integer'],
-        ];
-        CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
-        $msg[] = 'Update ID for ' . $dao->committee;
-      }
-      else {
-        // Committee does not exist, create it
-        $params = [
-          'sequential' => 1,
-          'contact_type' => 'Organization',
-          'contact_sub_type' => 'EP_Committee',
-          'organization_name' => 'Committee on ' . $dao->committee,
-        ];
-        $comm = civicrm_api3('Contact', 'create', $params);
-        $msg[] = 'Create committee ' . $dao->committee;
-
-        $sqlUpdate = "update tmp_committee set committee_id = %2 where committee = %1";
-        $sqlUpdateParams = [
-          1 => [$dao->committee, 'String'],
-          2 => [$comm['id'] , 'Integer'],
-        ];
-        CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
-        $msg[] = 'Update ID for ' . $dao->committee;
-      }
-    }
-
-    // fill in the relationships ID
-    $msg[] = "=== Getting relationship ID's ===";
-    $sql = "
-      select
-        distinct meprole
-      from
-        tmp_committee
-    ";
-    $dao = CRM_Core_DAO::executeQuery($sql);
-    while ($dao->fetch()) {
-      // get the corresponding relationship
-      $sqlRel = "
-        select id from civicrm_relationship_type
-        where 
-          name_a_b = %1
-      ";
-      $sqlRelParam = [
-        1 => [str_replace(', First', '', $dao->meprole), 'String'],
-      ];
-      $daoRel = CRM_Core_DAO::executeQuery($sqlRel, $sqlRelParam);
-      if ($daoRel->fetch()) {
-        $sqlUpdate = 'update tmp_committee set relationship_type_id = %1 where meprole = %2';
-        $sqlUpdateParams = [
-          1 => [$daoRel->id, 'Integer'],
-          2 => [$dao->meprole, 'String'],
-        ];
-        CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
-      }
-      else {
-        throw new Exception('Relationship ' . $dao->meprole . ' NOT FOUND!');
-      }
-    }
-
-    // fill in the group ID of the corresponding party
-    $msg[] = "=== Getting party/group ID's ===";
-    $sqlUpdate = "update tmp_committee set group_id = 104 where party = 'EPP'";
-    CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
-    $sqlUpdate = "update tmp_committee set group_id = 103 where party = 'Greens-EFA'";
-    CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
-    $sqlUpdate = "update tmp_committee set group_id = 101 where party = 'ECR'";
-    CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
-    $sqlUpdate = "update tmp_committee set group_id = 105 where party = 'RE'";
-    CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
-    $sqlUpdate = "update tmp_committee set group_id = 102 where party = 'S&D'";
-    CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
-    $sqlUpdate = "update tmp_committee set group_id = 107 where party = 'ID'";
-    CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
-    $sqlUpdate = "update tmp_committee set group_id = 109 where party = 'GUE-NGL'";
-    CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
-    $sqlUpdate = "update tmp_committee set group_id = 106 where party = 'NA' or ifnull(party, '') = ''";
-    CRM_Core_DAO::executeQuery($sqlUpdate, $sqlUpdateParams);
-
-    // update the mep country id
-    $sql = "
-      update tmp_committee c 
-      inner join 
-      civicrm_group g on g.title = c.mep_country
-      set ep_country_id = g.id
-    ";
-    CRM_Core_DAO::executeQuery($sql);
-
-    if (count($msg) == 0) {
-      $msg[] = 'OK';
-    }
-
-    return $msg;
-  }
-
-  public function disableMEPs() {
-    $msg = [];
-
-    // disable stuff
-    $msg[] = "=== Disabling old MEPs: Committees ===";
-    $sql = "
-      update civicrm_relationship 
-      set end_date = '2019-05-31', is_active = 0
-      where contact_id_b in (
-        select id from civicrm_contact
-        where contact_sub_type = 'EP_Committee'
-      )
-      and start_date is null and end_date is null
-      and relationship_type_id in (51,48,49,50)
-    ";
-    $dao = CRM_Core_DAO::executeQuery($sql);
-
-    $msg[] = "=== Disabling old MEPs: Employer ===";
-    $sql = "
-      select distinct contact_id_a
-      from civicrm_relationship
-      where
-      end_date = '2019-05-31'
-    ";
-    $dao = CRM_Core_DAO::executeQuery($sql);
-    while ($dao->fetch()) {
-      // get the employer relationship
-      $params = [
-        'sequential' => 1,
-        'contact_id_a' => $dao->contact_id_a,
-        'contact_id_b' => 326,
-        'relationship_type_id' => 5,
-        'is_active' => 1,
-      ];
-      $rel = civicrm_api3('Relationship','get', $params);
-      if ($rel['count'] > 0) {
-        // disable employer relationship
-        $relParams = [
-          'sequential' => 1,
-          'id' => $rel['values'][0]['id'],
-          'is_active' => 0,
-          'end_date' => '2019-05-31',
-        ];
-        civicrm_api3('Relationship','create', $relParams);
-      }
-    }
-
-    $msg[] = "=== Disabling old MEPs: change job title ===";
-    $sql = "update civicrm_contact set job_title = 'former MEP' where job_title = 'MEP' and ifnull(employer_id, 0) = 0";
-    CRM_Core_DAO::executeQuery($sql);
-
-    if (count($msg) == 0) {
-      $msg[] = 'OK';
-    }
-
-    return $msg;
-  }
-
-  public function importMEPs() {
+  public function importCommission() {
     $msg = '';
 
     // create queue
     $this->createQueue();
+    $this->deleteQueue();
 
-    if ($this->queue->numberOfItems() > 0) {
-      $msg = 'The queue is not empty: it contains ' . $this->queue->numberOfItems() . ' item(s).';
+    $sql = "select * from tmp_import_commission ";
+    $dao = CRM_Core_DAO::executeQuery($sql);
+
+    // fill the queue with id's
+    while ($dao->fetch()) {
+      $task = new CRM_Queue_Task(['CRM_Beucimport_Helper', 'importCommissionTask'], [$dao->id]);
+      $this->queue->createItem($task);
     }
-    else {
-      $sql = "select * from tmp_committee";
-      $dao = CRM_Core_DAO::executeQuery($sql);
 
-      // fill the queue with group id's
-      while ($dao->fetch()) {
-        $task = new CRM_Queue_Task(['CRM_Beucimport_Helper', 'importMepTask'], [$dao->id]);
-        $this->queue->createItem($task);
-      }
-
-      $msg = 'Running queue';
-      $this->runQueue('Import MEPs');
-    }
+    $msg = 'Running queue';
+    $this->runQueue('Import Commission');
 
     return $msg;
   }
 
-  public static function importMepTask(CRM_Queue_TaskContext $ctx, $id) {
-    // select the name of the group
-    $sql = "select * from tmp_committee where id = $id";
+  public static function importCommissionTask(CRM_Queue_TaskContext $ctx, $id) {
+    $sql = "select * from tmp_import_commission where id = $id";
     $mepToImport = CRM_Core_DAO::executeQuery($sql);
     if ($mepToImport->fetch()) {
-      $mepName = explode(' ', $mepToImport->name);
-      $mepFirstName = $mepName[0];
-      unset($mepName[0]);
-      $mepLastName = implode(' ', $mepName);
-
       // see if the contact is in civi
       $params = [
         'sequential' => 1,
-        'first_name' => $mepFirstName,
-        'last_name' => $mepLastName,
+        'first_name' => $mepToImport->first_name,
+        'last_name' => $mepToImport->last_name,
         'contact_type' => 'Individual',
       ];
       $c = civicrm_api3('Contact', 'get', $params);
@@ -238,6 +53,10 @@ class CRM_Beucimport_Helper {
         // create the contact
         if ($mepToImport->prefix == 'Mr') {
           $params['prefix_id'] = 3;
+          $params['gender_id'] = 2;
+        }
+        elseif ($mepToImport->prefix == 'HE') {
+          $params['prefix_id'] = 6;
           $params['gender_id'] = 2;
         }
         elseif ($mepToImport->prefix == 'Ms') {
@@ -259,71 +78,50 @@ class CRM_Beucimport_Helper {
         $contactID = $c['values'][0]['id'];
       }
 
+      // update job title and employer
+      $params = [
+        'sequential' => 1,
+        'id' => $contactID,
+        'job_title' => $mepToImport->job_title,
+        'employer_id' => 322,
+      ];
+      civicrm_api3('Contact', 'create', $params);
+
+      // get the relationship type
+      $relTypeID = CRM_Core_DAO::singleValueQuery("select id from civicrm_relationship_type where name_a_b = '" . trim($mepToImport->relationship) . "'");
+      if (!$relTypeID) {
+        CRM_Core_Session::setStatus('reltype ' . $mepToImport->relationship . ' not found, contact_id = ' . $contactID . ', ID = ' . $id);
+        throw new Exception("error: " . $mepToImport->relationship);
+      }
+
+      // get the target contact
+      if (strpos($mepToImport->relationship_with,'Way of Life') === FALSE) {
+        $targetContactID = CRM_Core_DAO::singleValueQuery("select id from civicrm_contact where organization_name = '" . str_replace("'", "''", trim($mepToImport->relationship_with)) . "' and contact_type ='Organization' and is_deleted=0");
+        if (!$targetContactID) {
+          CRM_Core_Session::setStatus('contact ' . $mepToImport->relationship_with . ' not found, contact_id = ' . $contactID . ', ID = ' . $id);
+          throw new Exception("error: " . $mepToImport->relationship_with);
+        }
+      }
+      else {
+        $targetContactID = 12902;
+      }
+
       // create/update the relationship
       $paramsRel = [
         'sequential' => 1,
         'contact_id_a' => $contactID,
-        'contact_id_b' => $mepToImport->committee_id,
+        'contact_id_b' => $targetContactID,
         'is_active' => 1,
-        'start_date' => '2019-06-01',
-        'relationship_type_id' => $mepToImport->relationship_type_id,
+        'start_date' => '2020-02-20',
+        'relationship_type_id' => $relTypeID,
       ];
       $ret = civicrm_api3('Relationship', 'get', $paramsRel);
       if ($ret['count'] == 0) {
         civicrm_api3('Relationship', 'create', $paramsRel);
       }
 
-      // update job title and employer
-      $params = [
-        'sequential' => 1,
-        'id' => $contactID,
-        'job_title' => 'MEP',
-        'employer_id' => 326,
-        'source' => 'import August 2019',
-      ];
-      civicrm_api3('Contact', 'create', $params);
-
-      // put contact in group corresponding to the political party
-      $params = [
-        'sequential' => 1,
-        'contact_id' => $contactID,
-        'group_id' => $mepToImport->group_id,
-      ];
-      civicrm_api3('GroupContact', 'create', $params);
-
-      // put contact in group corresponding to the country
-      if ($mepToImport->ep_country_id) {
-        $params = [
-          'sequential' => 1,
-          'contact_id' => $contactID,
-          'group_id' => $mepToImport->ep_country_id,
-        ];
-        civicrm_api3('GroupContact', 'create', $params);
-      }
-
-      // delete the work address
-      $sql = "delete from civicrm_address where contact_id = $contactID and location_type_id = 2";
-      CRM_Core_DAO::executeQuery($sql);
-
-      // add the work address
-      if ($mepToImport->street_address) {
-        $params = [
-          'sequential' => 1,
-          'contact_id' => $contactID,
-          'location_type_id' => 2,
-          'is_primary' => 1,
-          'street_address' => $mepToImport->street_address,
-          'supplemental_address_1' => $mepToImport->supplement_1,
-          'supplemental_address_2' => $mepToImport->supplement_2,
-          'city' => $mepToImport->city,
-          'postal_code' => $mepToImport->postal_code,
-          'country_id' => 1020,
-        ];
-        civicrm_api3('Address', 'create', $params);
-      }
-
       // delete the work phone
-      $sql = "delete from civicrm_phone where contact_id = $contactID and location_type_id = 2";
+      $sql = "delete from civicrm_phone where contact_id = $contactID and location_type_id = 2 and phone_type_id = 1";
       CRM_Core_DAO::executeQuery($sql);
 
       // add the work phone
@@ -339,12 +137,13 @@ class CRM_Beucimport_Helper {
         civicrm_api3('Phone', 'create', $params);
       }
 
-      // delete the work email
-      $sql = "delete from civicrm_email where contact_id = $contactID and location_type_id = 2";
-      CRM_Core_DAO::executeQuery($sql);
-
-      // add the work phone
-      if ($mepToImport->email) {
+      // check if we have the email
+      $sql = "select id from civicrm_email where contact_id = $contactID and email = '" . $mepToImport->email . "'";
+      $id = CRM_Core_DAO::singleValueQuery($sql);
+      if ($id) {
+        // do nothing
+      }
+      else {
         $params = [
           'sequential' => 1,
           'contact_id' => $contactID,
@@ -353,6 +152,7 @@ class CRM_Beucimport_Helper {
           'email' => $mepToImport->email,
         ];
         civicrm_api3('Email', 'create', $params);
+
       }
     }
 
@@ -585,11 +385,11 @@ class CRM_Beucimport_Helper {
         c.id as country_id
       from
         tmpbeuc_orgs o
-      left outer join 
+      left outer join
         civicrm_tag t on o.tag = t.name
-      left outer join 
+      left outer join
         civicrm_country c on o.country_iso_code = c.iso_code
-      where 
+      where
         o.id = $id
     ";
     $dao = CRM_Core_DAO::executeQuery($sql);
@@ -739,9 +539,9 @@ class CRM_Beucimport_Helper {
         tmpbeuc_pers p
       left outer join
         civicrm_option_value ov on p.title = ov.name and option_group_id = 6
-      left outer join 
-        civicrm_country c on p.country_iso_code = c.iso_code        
-      where 
+      left outer join
+        civicrm_country c on p.country_iso_code = c.iso_code
+      where
          p.id = $id
     ";
     $dao = CRM_Core_DAO::executeQuery($sql);

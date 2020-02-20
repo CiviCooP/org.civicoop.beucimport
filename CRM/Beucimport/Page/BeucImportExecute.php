@@ -15,17 +15,8 @@ class CRM_Beucimport_Page_BeucImportExecute extends CRM_Core_Page {
       if ($action == 'createConfig') {
         $msg = $importHelper->createConfiguration();
       }
-      elseif ($action == 'deleteQueue') {
-        $msg = $importHelper->deleteQueue();
-      }
-      elseif ($action == 'getCommitteeIDs') {
-        $msg = $importHelper->getCommitteeIDs();
-      }
-      elseif ($action == 'disableMEPs') {
-        $msg = $importHelper->disableMEPs();
-      }
-      elseif ($action == 'importMEPs') {
-        $msg = $importHelper->importMEPs();
+      elseif ($action == 'importCommission') {
+        $msg = $importHelper->importCommission();
       }
       else {
         $msg = "Error: Unknown action: $action";
